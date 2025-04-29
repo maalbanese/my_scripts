@@ -1,4 +1,3 @@
-
 import xarray as xr
 import os
 import matplotlib.pyplot as plt
@@ -6,6 +5,7 @@ import numpy as np
 import glob
 import pandas as pd
 import re
+from climtools import climtools_lib as ctl
 
 ##ECE4
 def load_dRt_ece4(base_folder, feedbacks, param_name, valchange, subfolder_pattern="s00*"):
@@ -392,6 +392,84 @@ def plot_toa_anomaly_ece3(base_folder, param, dRt_folder, title, output_file=Non
     - title: str, title for the plot
     - output_file: str, optional, file path to save the plot
     """
+
+    def calculate_tnrc(file_pattern_tsrc, file_pattern_ttrc):
+        """Helper function to calculate tnrcs from rsntcs and rlntcs."""
+        ds1 = xr.open_mfdataset(file_pattern_tsrc, combine="by_coords")
+        ds2 = xr.open_mfdataset(file_pattern_ttrc, combine="by_coords")
+        tnrc = ds1["tsrc"] + ds2["ttrc"]
+        return tnrc
+
+    # Construct file paths for simulation and control data
+    sim_path_tsrc = os.path.join(base_folder, "pi", "t_sim", param, f"{param}_*_tsrc.nc")
+    sim_path_ttrc = os.path.join(base_folder, "pi", "t_sim", param, f"{param}_*_ttrc.nc")
+    ctrl_path_tsrc = os.path.join(base_folder, "pi", "std_sim", "tpa1", "tpa1_*_tsrc.nc")
+    ctrl_path_ttrc = os.path.join(base_folder, "pi", "std_sim", "tpa1", "tpa1_*_ttrc.nc")
+
+    # Calculate tnrcs for simulation and control
+    tnrc_sim = calculate_tnrc(sim_path_tsrc, sim_path_ttrc)
+    tnrc_ctrl = calculate_tnrc(ctrl_path_tsrc, ctrl_path_ttrc)
+
+    # Compute annual mean anomaly
+    tnr_sim_annual = tnrc_sim.groupby("time.year").mean(dim="time")
+    tnr_ctrl_annual = tnrc_ctrl.groupby("time.year").mean(dim="time")
+    climatology = tnr_ctrl_annual.mean(dim="year")
+    tnr_anomaly = (tnr_sim_annual - climatology)  # Keep it as xarray
+    tnr_anomaly = ctl.global_mean(tnr_anomaly)
+
+    
+    # Load and sum dRt components
+    dRt_files = [
+        "dRt_albedo_global_clr_climatology-HUANGkernels.nc",
+        "dRt_lapse-rate_global_clr_climatology-HUANGkernels.nc",
+        "dRt_planck-atmo_global_clr_climatology-HUANGkernels.nc",
+        "dRt_planck-surf_global_clr_climatology-HUANGkernels.nc",
+        "dRt_water-vapor_global_clr_climatology-HUANGkernels.nc",
+    ]
+    
+    dRt_components = [xr.open_dataset(os.path.join(dRt_folder, f))["__xarray_dataarray_variable__"] for f in dRt_files]
+    dRt_sum = sum(dRt_components)
+
+    # Extract time coordinates
+    time_coords = dRt_components[0]["year"]
+    
+    # Plotting
+    plt.figure(figsize=(8, 5))
+    plt.plot(tnr_anomaly["year"], tnr_anomaly, color="black", marker="o", linestyle="-", label="Net TOA Anomaly")
+
+    colors = ["blue", "green", "purple", "orange", "cyan"]
+    labels = ["Albedo", "Lapse Rate", "Planck Atmos", "Planck Surface", "Water Vapor"]
+
+    for comp, color, label in zip(dRt_components, colors, labels):
+        plt.plot(time_coords, comp, color=color, marker="s", linestyle="--", label=label)
+    
+    plt.plot(time_coords, dRt_sum, color="red", linestyle="-", linewidth=2, label="Sum of dRt Components")
+    
+    plt.xticks(tnr_anomaly["year"].values, [str(y) for y in tnr_anomaly["year"].values])
+    plt.xlabel("Year")
+    plt.ylabel("W/m²")
+    plt.title(title, fontsize=14)
+    plt.axhline(0, color="gray", linestyle="--")
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    plt.grid(True)
+    
+    if output_file:
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    else:
+        plt.show()
+
+
+def plot_toa_anomaly_ece3_cd(base_folder, param, dRt_folder, title, output_file=None):
+    """
+    Plots the TOA anomaly and dRt components for a given ECE3 parameter.
+    
+    Parameters:
+    - base_folder: str, base path containing the simulation and control datasets
+    - param: str, parameter identifier (e.g., 'pipb')
+    - dRt_folder: str, folder containing dRt component files
+    - title: str, title for the plot
+    - output_file: str, optional, file path to save the plot
+    """
     # Load simulation and control datasets
     sim_path = os.path.join(base_folder, "pi", "t_sim", param, f"{param}_*_tnr.nc")
     ctrl_path = os.path.join(base_folder, "pi", "std_sim", "tpa1", "tpa1_*_tnr.nc")
@@ -403,7 +481,8 @@ def plot_toa_anomaly_ece3(base_folder, param, dRt_folder, title, output_file=Non
     tnr_sim_annual = ds_sim["tnr"].groupby("time.year").mean(dim="time")
     tnr_ctrl_annual = ds_ctrl["tnr"].groupby("time.year").mean(dim="time")
     climatology = tnr_ctrl_annual.mean(dim="year")
-    tnr_anomaly = (tnr_sim_annual - climatology).mean(dim=["lat", "lon"]).to_pandas()
+    tnr_anomaly = (tnr_sim_annual - climatology) 
+    tnr_anomaly = ctl.global_mean(tnr_anomaly)
     
     # Load and sum dRt components
     dRt_files = [
@@ -414,26 +493,30 @@ def plot_toa_anomaly_ece3(base_folder, param, dRt_folder, title, output_file=Non
         "dRt_water-vapor_global_cld_climatology-HUANGkernels.nc",
     ]
     
-    dRt_components_pd = [xr.open_dataset(os.path.join(dRt_folder, f))["__xarray_dataarray_variable__"].to_pandas() for f in dRt_files]
-    dRt_sum_pd = sum(dRt_components_pd)
+    dRt_components = [xr.open_dataset(os.path.join(dRt_folder, f))["__xarray_dataarray_variable__"] for f in dRt_files]
+    dRt_sum = sum(dRt_components)
+
+    # Extract time coordinates
+    time_coords = dRt_components[0]["year"]
     
     # Plotting
     plt.figure(figsize=(8, 5))
-    plt.plot(tnr_anomaly.index, tnr_anomaly, color="black", marker="o", linestyle="-", label="Net TOA Anomaly")
-    
+    plt.plot(tnr_anomaly["year"], tnr_anomaly, color="black", marker="o", linestyle="-", label="Net TOA Anomaly")
+
     colors = ["blue", "green", "purple", "orange", "cyan"]
     labels = ["Albedo", "Lapse Rate", "Planck Atmos", "Planck Surface", "Water Vapor"]
+
+    for comp, color, label in zip(dRt_components, colors, labels):
+        plt.plot(time_coords, comp, color=color, marker="s", linestyle="--", label=label)
     
-    for comp_pd, color, label in zip(dRt_components_pd, colors, labels):
-        plt.plot(comp_pd.index, comp_pd, color=color, marker="s", linestyle="--", label=label)
+    plt.plot(time_coords, dRt_sum, color="red", linestyle="-", linewidth=2, label="Sum of dRt Components")
     
-    plt.plot(dRt_sum_pd.index, dRt_sum_pd, color="red", linestyle="-", linewidth=2, label="Sum of dRt Components")
-    
+    plt.xticks(tnr_anomaly["year"].values, [str(y) for y in tnr_anomaly["year"].values])
     plt.xlabel("Year")
     plt.ylabel("W/m²")
     plt.title(title, fontsize=14)
     plt.axhline(0, color="gray", linestyle="--")
-    plt.legend()
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     plt.grid(True)
     
     if output_file:
@@ -445,7 +528,7 @@ def plot_toa_anomaly_ece3(base_folder, param, dRt_folder, title, output_file=Non
 def plot_toa_anomaly_ece4(base_folder, param, dRt_folder, title, output_file=None):
     """
     Plots the TOA anomaly (calculated from rsntcs - rlntcs) and dRt components.
-    
+
     Parameters:
     - base_folder: str, base path containing the simulation and control datasets
     - param: str, parameter identifier (e.g., 's001')
@@ -453,58 +536,128 @@ def plot_toa_anomaly_ece4(base_folder, param, dRt_folder, title, output_file=Non
     - title: str, title for the plot
     - output_file: str, optional, file path to save the plot
     """
-    
+
     def calculate_tnrcs(file_pattern):
         """Helper function to calculate tnrcs from rsntcs and rlntcs."""
         ds = xr.open_mfdataset(file_pattern, combine="by_coords")
-        tnrcs = ds["rsntcs"] - ds["rlntcs"]
+        tnrcs = ds["rsntcs"] + ds["rlntcs"]
         return tnrcs
-    
+
     # Construct file paths for simulation and control data
     sim_path = os.path.join(base_folder, "t_sim", param, "oifs", "regridded", f"{param}_*_1m_*.nc")
-    ctrl_path = os.path.join(base_folder, "std_sim", "oifs", f"s000_*_1m_*.nc") #this path has been changed.
+    ctrl_path = os.path.join(base_folder, "std_sim", "oifs", f"s000_*_1m_*.nc")  # Path corrected
 
     # Calculate tnrcs for simulation and control
     tnrcs_sim = calculate_tnrcs(sim_path)
     tnrcs_ctrl = calculate_tnrcs(ctrl_path)
-    
+
     # Compute annual mean anomaly
     tnr_sim_annual = tnrcs_sim.groupby("time_counter.year").mean(dim="time_counter")
     tnr_ctrl_annual = tnrcs_ctrl.groupby("time_counter.year").mean(dim="time_counter")
     climatology = tnr_ctrl_annual.mean(dim="year")
-    tnr_anomaly = (tnr_sim_annual - climatology).mean(dim=["lat", "lon"]).to_pandas()
-    
+    tnr_anomaly = (tnr_sim_annual - climatology)  # Keep it as xarray
+    tnr_anomaly = ctl.global_mean(tnr_anomaly)
+
     # Load and sum dRt components
     dRt_files = [
-        "dRt_lapse-rate_global_cld_climatology-HUANGkernels.nc",
-        "dRt_planck-atmo_global_cld_climatology-HUANGkernels.nc",
-        "dRt_planck-surf_global_cld_climatology-HUANGkernels.nc",
-        "dRt_water-vapor_global_cld_climatology-HUANGkernels.nc",
+        "dRt_lapse-rate_global_clr_climatology-HUANGkernels.nc",
+        "dRt_planck-atmo_global_clr_climatology-HUANGkernels.nc",
+        "dRt_planck-surf_global_clr_climatology-HUANGkernels.nc",
+        "dRt_water-vapor_global_clr_climatology-HUANGkernels.nc",
     ]
     
-    dRt_components_pd = [xr.open_dataset(os.path.join(dRt_folder, f))["__xarray_dataarray_variable__"].to_pandas() for f in dRt_files]
-    dRt_sum_pd = sum(dRt_components_pd)
-    
+    dRt_components = [xr.open_dataset(os.path.join(dRt_folder, f))["__xarray_dataarray_variable__"] for f in dRt_files]
+    dRt_sum = sum(dRt_components)
+
     # Plotting
     plt.figure(figsize=(8, 5))
-    plt.plot(tnr_anomaly.index, tnr_anomaly, color="black", marker="o", linestyle="-", label="Net TOA Anomaly")
-    
+    plt.plot(tnr_anomaly["year"].values, tnr_anomaly.values, color="black", marker="o", linestyle="-", label="Net TOA Anomaly")
+
     colors = ["blue", "green", "purple", "orange"]
     labels = ["Lapse Rate", "Planck Atmos", "Planck Surface", "Water Vapor"]
-    
-    for comp_pd, color, label in zip(dRt_components_pd, colors, labels):
-        plt.plot(comp_pd.index, comp_pd, color=color, marker="s", linestyle="--", label=label)
-    
-    plt.plot(dRt_sum_pd.index, dRt_sum_pd, color="red", linestyle="-", linewidth=2, label="Sum of dRt Components")
-    
+
+    for comp, color, label in zip(dRt_components, colors, labels):
+        plt.plot(comp["year"].values, comp.values, color=color, marker="s", linestyle="--", label=label)
+
+    plt.plot(dRt_sum["year"].values, dRt_sum.values, color="red", linestyle="-", linewidth=2, label="Sum of dRt Components")
+
     plt.xlabel("Year")
     plt.ylabel("W/m²")
     plt.title(title, fontsize=14)
     plt.axhline(0, color="gray", linestyle="--")
-    plt.legend()
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     plt.grid(True)
-    
+
     if output_file:
-        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.savefig(output_file, dpi=300, bbox_inches="tight")
     else:
         plt.show()
+
+
+
+# def plot_toa_anomaly_ece4(base_folder, param, dRt_folder, title, output_file=None):
+#     """
+#     Plots the TOA anomaly (calculated from rsntcs - rlntcs) and dRt components.
+    
+#     Parameters:
+#     - base_folder: str, base path containing the simulation and control datasets
+#     - param: str, parameter identifier (e.g., 's001')
+#     - dRt_folder: str, folder containing dRt component files
+#     - title: str, title for the plot
+#     - output_file: str, optional, file path to save the plot
+#     """
+    
+#     def calculate_tnrcs(file_pattern):
+#         """Helper function to calculate tnrcs from rsntcs and rlntcs."""
+#         ds = xr.open_mfdataset(file_pattern, combine="by_coords")
+#         tnrcs = ds["rsntcs"] - ds["rlntcs"]
+#         return tnrcs
+    
+#     # Construct file paths for simulation and control data
+#     sim_path = os.path.join(base_folder, "t_sim", param, "oifs", "regridded", f"{param}_*_1m_*.nc")
+#     ctrl_path = os.path.join(base_folder, "std_sim", "oifs", f"s000_*_1m_*.nc") #this path has been changed.
+
+#     # Calculate tnrcs for simulation and control
+#     tnrcs_sim = calculate_tnrcs(sim_path)
+#     tnrcs_ctrl = calculate_tnrcs(ctrl_path)
+    
+#     # Compute annual mean anomaly
+#     tnr_sim_annual = tnrcs_sim.groupby("time_counter.year").mean(dim="time_counter")
+#     tnr_ctrl_annual = tnrcs_ctrl.groupby("time_counter.year").mean(dim="time_counter")
+#     climatology = tnr_ctrl_annual.mean(dim="year")
+#     tnr_anomaly = (tnr_sim_annual - climatology).mean(dim=["lat", "lon"]).to_pandas()
+    
+#     # Load and sum dRt components
+#     dRt_files = [
+#         "dRt_lapse-rate_global_cld_climatology-HUANGkernels.nc",
+#         "dRt_planck-atmo_global_cld_climatology-HUANGkernels.nc",
+#         "dRt_planck-surf_global_cld_climatology-HUANGkernels.nc",
+#         "dRt_water-vapor_global_cld_climatology-HUANGkernels.nc",
+#     ]
+    
+#     dRt_components_pd = [xr.open_dataset(os.path.join(dRt_folder, f))["__xarray_dataarray_variable__"].to_pandas() for f in dRt_files]
+#     dRt_sum_pd = sum(dRt_components_pd)
+    
+#     # Plotting
+#     plt.figure(figsize=(8, 5))
+#     plt.plot(tnr_anomaly.index, tnr_anomaly, color="black", marker="o", linestyle="-", label="Net TOA Anomaly")
+    
+#     colors = ["blue", "green", "purple", "orange"]
+#     labels = ["Lapse Rate", "Planck Atmos", "Planck Surface", "Water Vapor"]
+    
+#     for comp_pd, color, label in zip(dRt_components_pd, colors, labels):
+#         plt.plot(comp_pd.index, comp_pd, color=color, marker="s", linestyle="--", label=label)
+    
+#     plt.plot(dRt_sum_pd.index, dRt_sum_pd, color="red", linestyle="-", linewidth=2, label="Sum of dRt Components")
+    
+#     plt.xlabel("Year")
+#     plt.ylabel("W/m²")
+#     plt.title(title, fontsize=14)
+#     plt.axhline(0, color="gray", linestyle="--")
+#     plt.legend()
+#     plt.grid(True)
+    
+#     if output_file:
+#         plt.savefig(output_file, dpi=300, bbox_inches='tight')
+#     else:
+#         plt.show()
