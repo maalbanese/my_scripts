@@ -1,3 +1,4 @@
+
 import xarray as xr
 import os
 import matplotlib.pyplot as plt
@@ -320,7 +321,9 @@ def plot_dRt_fb_all_params(base_folder, xlabel, ylabel, title, feedback_file, ou
             "s04*": "RMFDEPS", 
             "s05*": "RVICE", 
             "s06*": "RLCRITSNOW", 
-            "s07*": "RSNOWLIN2"
+            "s07*": "RSNOWLIN2",
+            "s08*": "RCLDIFF",
+            "s09*": "RCLDIFF_CONVI"
         }
     else:
         print("Invalid model type specified. Please choose 'ece3' or 'ece4'.")
